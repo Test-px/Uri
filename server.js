@@ -22,7 +22,7 @@ app.use((req, res, next) => {
 const GITHUB_PAT = process.env.GITHUB_PAT;                 // required
 const MCP_SECRET = process.env.MCP_SECRET || '';           // recommended
 const DEFAULT_OWNER = 'Test-px';
-const DEFAULT_REPO = 'Uri';
+const DEFAULT_REPO = 'PixelPlayer';
 const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || 'Test-px/PixelPlayer,Test-px/PixelMusic,Test-px/Metrolist,Test-px/Uri')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 // Repos Muse may READ for inspiration/comparison but never write to, even if ALLOW_MAIN_COMMITS is on.
@@ -1447,7 +1447,6 @@ app.listen(PORT, () => {
     if (!GITHUB_PAT) console.warn('WARNING: GITHUB_PAT is not set');
     if (!MCP_SECRET) console.warn('WARNING: MCP_SECRET is not set, /mcp is open to anyone with the URL');
 });
-
 
 
             
