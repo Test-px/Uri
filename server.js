@@ -21,11 +21,11 @@ app.use((req, res, next) => {
 // ---------- Config (set these in Render > Environment) ----------
 const GITHUB_PAT = process.env.GITHUB_PAT;                 // required
 const MCP_SECRET = process.env.MCP_SECRET || '';           // recommended
-const DEFAULT_OWNER = 'atappu805';
-const DEFAULT_REPO = 'Clean';
-const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || `${DEFAULT_OWNER}/${DEFAULT_REPO}`)
+const DEFAULT_OWNER = 'Test-px';
+const DEFAULT_REPO = 'Uri';
+const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || 'Test-px/PixelPlayer,Test-px/PixelMusic,Test-px/Metrolist,Test-px/Uri')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-// Repos Spark may READ for inspiration/comparison but never write to, even if ALLOW_MAIN_COMMITS is on.
+// Repos Muse may READ for inspiration/comparison but never write to, even if ALLOW_MAIN_COMMITS is on.
 const REFERENCE_REPOS = (process.env.REFERENCE_REPOS || '')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const SUPPORTED_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -33,7 +33,7 @@ const SUPPORTED_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 // ---------- Helpers ----------
 const ghHeaders = (accept = 'application/vnd.github+json') => ({
     'Authorization': `Bearer ${GITHUB_PAT}`,
-    'User-Agent': 'Render-Gemini-MCP',
+    'User-Agent': 'Render-Muse-MCP',
     'Accept': accept,
     'Content-Type': 'application/json'
 });
@@ -389,7 +389,7 @@ const TOOLS = [
     }
 ];
 
-const MAX_CHARS = 28000; // keeps each reply under the ~32000 chars Gemini shows before truncating
+const MAX_CHARS = 28000; // keeps each reply under the ~32000 chars Muse shows before truncating
 
 function sliceText(text, args) {
     // full=true bypasses chunking entirely - returns the complete file
@@ -1321,7 +1321,7 @@ async function createPullRequest(args) {
 
     const pr = await ghJson(`${api}/pulls`, {
         method: 'POST',
-        body: JSON.stringify({ title: args.pr_title, body: 'Automated fix by Gemini Spark.', head: args.branch, base: baseBranch })
+        body: JSON.stringify({ title: args.pr_title, body: 'Automated fix by Muse.', head: args.branch, base: baseBranch })
     });
     if (!pr.res.ok) throw new Error(`Open PR: ${pr.data.message || pr.res.status}`);
 
@@ -1447,6 +1447,7 @@ app.listen(PORT, () => {
     if (!GITHUB_PAT) console.warn('WARNING: GITHUB_PAT is not set');
     if (!MCP_SECRET) console.warn('WARNING: MCP_SECRET is not set, /mcp is open to anyone with the URL');
 });
+
 
 
             
