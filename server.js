@@ -21,8 +21,8 @@ app.use((req, res, next) => {
 // ---------- Config (set these in Render > Environment) ----------
 const GITHUB_PAT = process.env.GITHUB_PAT;                 // required
 const MCP_SECRET = process.env.MCP_SECRET || '';           // recommended
-const DEFAULT_OWNER = 'Saurav-02';
-const DEFAULT_REPO = 'Metrolist';
+const DEFAULT_OWNER = 'atappu805';
+const DEFAULT_REPO = 'Clean';
 const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || `${DEFAULT_OWNER}/${DEFAULT_REPO}`)
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 // Repos Spark may READ for inspiration/comparison but never write to, even if ALLOW_MAIN_COMMITS is on.
@@ -72,7 +72,7 @@ const TOOLS = [
     {
         name: 'get_file_contents',
         annotations: { title: 'Read file', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-        description: 'Reads a file (or lists a directory) in a GitHub repository. Works on the main repo or on a configured reference repo (pass owner/repo) for inspiration/comparison — never for writing. Large files are returned in chunks of about 28000 characters: use start_line and end_line to read further.',
+        description: 'Reads a file (or lists a directory) in a GitHub repository. Works on the main repo or on a configured reference repo (pass owner/repo) for inspiration/comparison — never for writing. Large files are returned in chunks of about 28000 characters: use start_line and end_line to read further, or set full=true to get the entire file at once (use for files you need to read completely).',
         inputSchema: {
             type: 'object',
             properties: {
@@ -81,9 +81,42 @@ const TOOLS = [
                 path: { type: 'string' },
                 ref: { type: 'string', description: 'Optional branch, tag or commit' },
                 start_line: { type: 'integer', description: 'Optional 1-based first line to return' },
-                end_line: { type: 'integer', description: 'Optional last line to return' }
+                end_line: { type: 'integer', description: 'Optional last line to return' },
+                full: { type: 'boolean', description: 'Set true to return the entire file without chunking (overrides start_line/end_line)' }
             },
             required: ['path']
+        }
+    },
+    {
+        name: 'download_file',
+        annotations: { title: 'Download binary file', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        description: 'Downloads any file (images, APKs, fonts, etc.) from a GitHub repository as base64. Use this for binary files like photos \u2014 get_file_contents only returns UTF-8 text and corrupts binary data. Works on the main repo or a configured reference repo (pass owner/repo).',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string' },
+                repo: { type: 'string' },
+                path: { type: 'string', description: 'File path in the repo, e.g. assets/logo.png' },
+                ref: { type: 'string', description: 'Optional branch, tag or commit' }
+            },
+            required: ['path']
+        }
+    },
+    {
+        name: 'upload_file',
+        annotations: { title: 'Upload binary file', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+        description: 'Uploads a binary file (photo, APK, font, etc.) to a GitHub repository. Pass the file content as a base64 string in base64_content. Creates the file if it does not exist, or overwrites it if it does. Committing to the default branch (main) only works if the server owner enabled it.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string' },
+                repo: { type: 'string' },
+                branch: { type: 'string', description: 'Existing branch to commit to, for example main' },
+                path: { type: 'string', description: 'Destination path in the repo, e.g. assets/photo.jpg' },
+                base64_content: { type: 'string', description: 'File content as a base64-encoded string (no data: prefix)' },
+                commit_message: { type: 'string' }
+            },
+            required: ['branch', 'path', 'base64_content', 'commit_message']
         }
     },
     {
@@ -301,6 +334,12 @@ const TOOLS = [
         inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, workflow: { type: 'string' }, branch: { type: 'string' }, status: { type: 'string' }, limit: { type: 'integer' } } }
     },
     {
+        name: 'delete_workflow_run',
+        annotations: { title: 'Delete a workflow run', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+        description: 'Deletes a GitHub Actions workflow run (and its logs) from the run history. Use list_workflow_runs to find run ids first.',
+        inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, run_id: { type: 'integer', description: 'Workflow run id to delete' } }, required: ['run_id'] }
+    },
+    {
         name: 'create_pull_request',
         annotations: { title: 'Create pull request', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
         description: 'Creates a new branch, changes one or more files, and opens ONE Pull Request (base defaults to main). Use "files": a list of {path, edits} to change several files at once (for example a Kotlin file and AndroidManifest.xml). Each edit is a {find, replace} snippet applied on the server; "find" must match the file exactly once. Only pass full "content" for new or small files.',
@@ -353,6 +392,11 @@ const TOOLS = [
 const MAX_CHARS = 28000; // keeps each reply under the ~32000 chars Gemini shows before truncating
 
 function sliceText(text, args) {
+    // full=true bypasses chunking entirely - returns the complete file
+    if (args.full === true) {
+        const lines = text.split('\n');
+        return `[lines 1-${lines.length} of ${lines.length}; ${text.length} chars in file; FULL]\n${text}`;
+    }
     const explicit = args.start_line !== undefined || args.end_line !== undefined;
     if (!explicit && text.length <= MAX_CHARS) return text;
 
@@ -403,6 +447,64 @@ async function getFileContents(args) {
         return JSON.stringify(file.entries.map(e => ({ name: e.name, path: e.path, type: e.type })), null, 2);
     }
     return sliceText(file.text, args);
+}
+
+async function downloadFile(args) {
+    const { owner, repo } = resolveRepo(args, { allowReference: true });
+    const path = args.path || '';
+    if (!path) throw new Error('path is required');
+    const api = `https://api.github.com/repos/${owner}/${repo}`;
+    const url = `${api}/contents/${encodePath(path)}${args.ref ? `?ref=${encodeURIComponent(args.ref)}` : ''}`;
+    const { res, data } = await ghJson(url);
+    if (!res.ok) {
+        const hint = res.status === 404 ? ' (wrong path, or GITHUB_PAT cannot access this repo)' : '';
+        throw new Error(`GitHub ${res.status} for ${owner}/${repo}:${path} - ${data.message || 'error'}${hint}`);
+    }
+    if (Array.isArray(data)) throw new Error(`"${path}" is a directory, not a file`);
+    let b64 = (data.encoding === 'base64' && data.content) ? data.content.replace(/\\s/g, '') : null;
+    let sha = data.sha, size = data.size;
+    if (!b64) {
+        if (!sha) throw new Error('GitHub did not return file content or blob sha');
+        const blob = await ghJson(`${api}/git/blobs/${sha}`);
+        if (!blob.res.ok || blob.data.encoding !== 'base64' || !blob.data.content)
+            throw new Error(`Could not fetch blob for "${path}": ${blob.data.message || blob.res.status}`);
+        b64 = blob.data.content.replace(/\\s/g, '');
+        size = blob.data.size;
+    }
+    return JSON.stringify({ path, sha, size_bytes: size, base64: b64 });
+}
+
+async function uploadFile(args) {
+    const { owner, repo } = resolveRepo(args);
+    const api = `https://api.github.com/repos/${owner}/${repo}`;
+    if (!args.branch) throw new Error('branch is required');
+    if (!args.path) throw new Error('path is required');
+    if (!args.base64_content) throw new Error('base64_content is required');
+    if (!args.commit_message) throw new Error('commit_message is required');
+    const b64 = String(args.base64_content).replace(/\\s/g, '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64) || b64.length % 4 !== 0)
+        throw new Error('base64_content is not valid base64 (no data: prefix, raw base64 only)');
+    const info = await ghJson(api);
+    if (!info.res.ok) throw new Error(`Repo: ${info.data.message || info.res.status}`);
+    if (args.branch === info.data.default_branch && process.env.ALLOW_MAIN_COMMITS !== 'true') {
+        throw new Error(`Direct commits to "${args.branch}" are disabled on this server. Use create_pull_request, or ask the owner to set ALLOW_MAIN_COMMITS=true.`);
+    }
+    const ref = await ghJson(`${api}/git/ref/heads/${encodePath(args.branch)}`);
+    if (!ref.res.ok) throw new Error(`Branch "${args.branch}" not found (use create_pull_request to make a new branch)`);
+    const existing = await ghJson(`${api}/contents/${encodePath(args.path)}?ref=${encodeURIComponent(args.branch)}`);
+    const body = { message: args.commit_message, content: b64, branch: args.branch };
+    if (existing.res.ok && existing.data && existing.data.sha) body.sha = existing.data.sha;
+    const put = await ghJson(`${api}/contents/${encodePath(args.path)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body)
+    });
+    if (!put.res.ok) throw new Error(`Upload failed: ${put.data.message || put.res.status}`);
+    return JSON.stringify({
+        status: 'uploaded', branch: args.branch, path: args.path,
+        sha: put.data.content && put.data.content.sha,
+        size_bytes: put.data.content && put.data.content.size,
+        url: put.data.content && put.data.content.html_url
+    });
 }
 
 function applyEdits(original, edits) {
@@ -1164,6 +1266,18 @@ async function listWorkflowRuns(args) {
     return JSON.stringify((data.workflow_runs || []).map(runSummary), null, 2);
 }
 
+async function deleteWorkflowRun(args) {
+    const { owner, repo } = resolveRepo(args);
+    if (!args.run_id) throw new Error('run_id is required');
+    const api = `https://api.github.com/repos/${owner}/${repo}`;
+    const del = await fetch(`${api}/actions/runs/${encodeURIComponent(args.run_id)}`, { method: 'DELETE', headers: ghHeaders() });
+    if (del.status !== 204) {
+        const d = await del.json().catch(() => ({}));
+        throw new Error(`Delete workflow run ${args.run_id}: ${d.message || del.status}`);
+    }
+    return JSON.stringify({ status: 'deleted', run_id: args.run_id });
+}
+
 async function createPullRequest(args) {
     const { owner, repo } = resolveRepo(args);
     const api = `https://api.github.com/repos/${owner}/${repo}`;
@@ -1231,7 +1345,7 @@ async function handleMessage(msg) {
                     result: {
                         protocolVersion: SUPPORTED_VERSIONS.includes(requested) ? requested : SUPPORTED_VERSIONS[0],
                         capabilities: { tools: {} },
-                        serverInfo: { name: 'github-mcp-bridge', version: '2.1.0' }
+                        serverInfo: { name: 'github-mcp-bridge', version: '2.3.0' }
                     }
                 };
             }
@@ -1253,6 +1367,8 @@ async function handleMessage(msg) {
                     if (!GITHUB_PAT) throw new Error('GITHUB_PAT is not set on the server');
                     let text;
                     if (name === 'get_file_contents') text = await getFileContents(args);
+                    else if (name === 'download_file') text = await downloadFile(args);
+                    else if (name === 'upload_file') text = await uploadFile(args);
                     else if (name === 'create_pull_request') text = await createPullRequest(args);
                     else if (name === 'search_code') text = await searchCode(args);
                     else if (name === 'commit_files') text = await commitFiles(args);
@@ -1271,6 +1387,7 @@ async function handleMessage(msg) {
                     else if (name === 'add_comment') text = await addComment(args);
                     else if (name === 'list_releases') text = await listReleases(args);
                     else if (name === 'list_workflow_runs') text = await listWorkflowRuns(args);
+                    else if (name === 'delete_workflow_run') text = await deleteWorkflowRun(args);
                     else if (name === 'preview_bulk_rename') text = await previewBulkRename(args);
                     else if (name === 'apply_bulk_rename') text = await applyBulkRename(args);
                     else throw new Error(`Unknown tool: ${name}`);
@@ -1330,3 +1447,6 @@ app.listen(PORT, () => {
     if (!GITHUB_PAT) console.warn('WARNING: GITHUB_PAT is not set');
     if (!MCP_SECRET) console.warn('WARNING: MCP_SECRET is not set, /mcp is open to anyone with the URL');
 });
+
+
+            
